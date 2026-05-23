@@ -1,0 +1,6 @@
+# ビルド成果物
+/passcode-gen
+*.exe
+
+# OS
+.DS_Store
