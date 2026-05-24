@@ -36,6 +36,22 @@ go build -o passcode-gen # バイナリを生成
 ./passcode-gen
 ```
 
+## 短縮コマンド（エイリアス）
+
+`passcode-gen` は名前が長いため、シェルにエイリアスを登録すると短く実行できます。
+`~/.zshrc`（bash の場合は `~/.bashrc`）に次の行を追加してください。
+
+```sh
+alias pscd-gen='passcode-gen'
+```
+
+設定を反映すれば `pscd-gen` で実行できます。
+
+```sh
+source ~/.zshrc   # 反映（新しいシェルを開いてもよい）
+pscd-gen
+```
+
 ## 除外するパターン
 
 以下のいずれかに該当する番号は「弱い」とみなし、該当しないものが出るまで再生成します。
