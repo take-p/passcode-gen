@@ -80,23 +80,125 @@ func TestFullScan(t *testing.T) {
 	}
 }
 
-// generate は指定した桁数の数字列を返すこと（弱さの除外は main 側のループが担う）。
-func TestGenerate(t *testing.T) {
+// samplePIN は指定桁数の数字列を返し、局所制約（canFollow）を満たすこと。
+func TestSamplePIN(t *testing.T) {
 	for _, n := range []int{minDigits, defaultDigits, 6, maxDigits} {
+		ways := buildTable(n)
 		for i := 0; i < 500; i++ {
-			pw, err := generate(n)
+			pw, err := samplePIN(ways, n)
 			if err != nil {
-				t.Fatalf("generate(%d) がエラー: %v", n, err)
+				t.Fatalf("samplePIN(%d) がエラー: %v", n, err)
 			}
 			if len(pw) != n {
 				t.Fatalf("桁数が %d（期待 %d）: %s", len(pw), n, pw)
 			}
-			for _, c := range pw {
-				if c < '0' || c > '9' {
-					t.Fatalf("数字以外が含まれる: %s", pw)
-				}
+			if !allCanFollow(pw) {
+				t.Fatalf("局所制約違反の生成: %s", pw)
 			}
 		}
+	}
+}
+
+// allCanFollow は pw の各隣接位置が canFollow を満たすか（連番以外の局所制約に合格か）を返す。
+func allCanFollow(pw []byte) bool {
+	prev2, prev1 := sentinel, sentinel
+	for _, c := range pw {
+		if c < '0' || c > '9' {
+			return false
+		}
+		if !canFollow(prev2, prev1, c) {
+			return false
+		}
+		prev2, prev1 = prev1, c
+	}
+	return true
+}
+
+// isSequence は pw が完全な昇順または降順の連番か（isWeak の連番ルール相当）を返す。
+func isSequence(pw []byte) bool {
+	asc, desc := true, true
+	for i := 1; i < len(pw); i++ {
+		if pw[i]-pw[i-1] != 1 {
+			asc = false
+		}
+		if pw[i-1]-pw[i] != 1 {
+			desc = false
+		}
+	}
+	return asc || desc
+}
+
+// canFollow が isWeak の「連番以外」の局所ルールと厳密に一致することを全数で検証する。
+func TestCanFollowMatchesIsWeak(t *testing.T) {
+	for _, L := range []int{4, 5} {
+		upper := 1
+		for i := 0; i < L; i++ {
+			upper *= 10
+		}
+		for v := 0; v < upper; v++ {
+			s := []byte(fmt.Sprintf("%0*d", L, v))
+			local := allCanFollow(s)
+			weak := isWeak(s)
+			if !local {
+				// 局所制約違反は必ず isWeak が拾う（局所ルールは isWeak の部分集合）
+				if !weak {
+					t.Fatalf("%s: 局所違反だが isWeak=false", s)
+				}
+			} else if weak && !isSequence(s) {
+				// 局所 OK で isWeak=true になり得るのは連番のときだけ
+				t.Fatalf("%s: 局所 OK かつ非連番なのに isWeak=true", s)
+			}
+		}
+	}
+}
+
+// buildTable の数え上げが、全列挙した局所制約合格数と一致することを検証する（重み付けの正しさ）。
+func TestBuildTableCounts(t *testing.T) {
+	for _, L := range []int{4, 5, 6} {
+		ways := buildTable(L)
+		got := ways[L][idx(sentinel)][idx(sentinel)]
+		want, upper := 0, 1
+		for i := 0; i < L; i++ {
+			upper *= 10
+		}
+		for v := 0; v < upper; v++ {
+			if allCanFollow([]byte(fmt.Sprintf("%0*d", L, v))) {
+				want++
+			}
+		}
+		if got != want {
+			t.Errorf("L=%d: buildTable 総数 %d, 全列挙 %d", L, got, want)
+		}
+	}
+}
+
+// samplePIN が 4 桁の有効候補をすべて生成し得る（カバレッジ）ことを確認する。
+func TestSampleCoverage(t *testing.T) {
+	valid := map[string]bool{}
+	for v := 0; v < 10000; v++ {
+		s := fmt.Sprintf("%04d", v)
+		if !isWeak([]byte(s)) {
+			valid[s] = true
+		}
+	}
+	ways := buildTable(4)
+	seen := map[string]bool{}
+	for i := 0; i < len(valid)*400; i++ {
+		pw, err := samplePIN(ways, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if isWeak(pw) { // 連番（稀）は対象外
+			continue
+		}
+		s := string(pw)
+		if !valid[s] {
+			t.Fatalf("有効集合外の %s が生成された", s)
+		}
+		seen[s] = true
+	}
+	if len(seen) != len(valid) {
+		t.Errorf("生成されたユニーク候補 %d, 有効候補 %d（未出現あり）", len(seen), len(valid))
 	}
 }
 

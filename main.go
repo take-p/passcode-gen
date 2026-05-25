@@ -48,6 +48,11 @@ func adjacent(a, b byte) bool {
 	return dr <= 1 && dc <= 1 && !(dr == 0 && dc == 0)
 }
 
+// isCorner はキー b がキーパッドの角 {1,3,7,9} かどうかを返す。
+func isCorner(b byte) bool {
+	return b == '1' || b == '3' || b == '7' || b == '9'
+}
+
 // isWeak は推測されやすい「弱い」暗証番号かどうかを判定する。
 // 桁数は pw の長さで決まり、4 桁以上の任意の長さを受け付ける。
 func isWeak(pw []byte) bool {
@@ -88,10 +93,9 @@ func isWeak(pw []byte) bool {
 	}
 
 	// 角→角（連続する2桁がともに角 {1,3,7,9} で異なる）／ 2↔0
-	corners := map[byte]bool{'1': true, '3': true, '7': true, '9': true}
 	for i := 1; i < len(pw); i++ {
 		a, b := pw[i-1], pw[i]
-		if corners[a] && corners[b] && a != b {
+		if isCorner(a) && isCorner(b) && a != b {
 			return true
 		}
 		if (a == '2' && b == '0') || (a == '0' && b == '2') {
@@ -102,15 +106,115 @@ func isWeak(pw []byte) bool {
 	return false
 }
 
-// generate は crypto/rand を用いて n 桁の数字文字列を生成する。
-func generate(n int) ([]byte, error) {
-	pw := make([]byte, n)
-	for i := 0; i < n; i++ {
-		v, err := rand.Int(rand.Reader, big.NewInt(10))
+// sentinel は「直前の桁が存在しない」ことを表す番兵。'0'..'9'(48..57) と衝突しない。
+const sentinel byte = 0
+
+// idx は桁バイトをテーブル添字へ変換する（sentinel→10、'0'..'9'→0..9）。
+func idx(b byte) int {
+	if b == sentinel {
+		return 10
+	}
+	return int(b - '0')
+}
+
+// unidx は idx の逆変換（10→sentinel、0..9→'0'..'9'）。
+func unidx(i int) byte {
+	if i == 10 {
+		return sentinel
+	}
+	return byte('0' + i)
+}
+
+// canFollow は直前2桁 (prev2, prev1) の後ろに cand を置けるかを返す。
+// isWeak の「連番以外」の局所ルールと厳密に一致させている。
+// prev1==sentinel は1桁目（無条件許可）、prev2==sentinel は飛ばし制約なしを表す。
+func canFollow(prev2, prev1, cand byte) bool {
+	if prev1 != sentinel {
+		if cand == prev1 { // 連続同一桁
+			return false
+		}
+		if adjacent(prev1, cand) { // キーパッド隣接
+			return false
+		}
+		if isCorner(prev1) && isCorner(cand) { // 角→角（cand!=prev1 は上で担保済み）
+			return false
+		}
+		if (prev1 == '2' && cand == '0') || (prev1 == '0' && cand == '2') { // 2↔0
+			return false
+		}
+	}
+	if prev2 != sentinel && cand == prev2 { // 飛ばし繰り返し（i桁目==i+2桁目）
+		return false
+	}
+	return true
+}
+
+// buildTable は後ろ向き DP で並び数を数える。
+// ways[r][idx(p2)][idx(p1)] = 直前2桁が (p2,p1) のとき、局所制約を満たして
+// 残り r 桁を埋められる並びの総数。
+func buildTable(digits int) [][11][11]int {
+	ways := make([][11][11]int, digits+1)
+	for a := 0; a < 11; a++ {
+		for b := 0; b < 11; b++ {
+			ways[0][a][b] = 1
+		}
+	}
+	for r := 1; r <= digits; r++ {
+		for a := 0; a < 11; a++ {
+			for b := 0; b < 11; b++ {
+				p2, p1 := unidx(a), unidx(b)
+				sum := 0
+				for d := 0; d < 10; d++ {
+					cand := byte('0' + d)
+					if canFollow(p2, p1, cand) {
+						sum += ways[r-1][b][idx(cand)]
+					}
+				}
+				ways[r][a][b] = sum
+			}
+		}
+	}
+	return ways
+}
+
+// samplePIN は buildTable のテーブルを用い、局所制約を満たす digits 桁の並びを
+// 「その桁を選んだ先に存在する並び数」で重み付けして一様に1個サンプリングする。
+// 重み>0 の候補のみ選ぶため、行き止まりは原理的に発生しない。
+func samplePIN(ways [][11][11]int, digits int) ([]byte, error) {
+	pw := make([]byte, 0, digits)
+	prev2, prev1 := sentinel, sentinel
+	for r := digits; r >= 1; r-- {
+		var cands, weights [10]int
+		m, total := 0, 0
+		for d := 0; d < 10; d++ {
+			cand := byte('0' + d)
+			if !canFollow(prev2, prev1, cand) {
+				continue
+			}
+			w := ways[r-1][idx(prev1)][idx(cand)] // この桁を置いた先の並び数
+			if w == 0 {
+				continue
+			}
+			cands[m], weights[m] = d, w
+			total += w
+			m++
+		}
+		nbig, err := rand.Int(rand.Reader, big.NewInt(int64(total)))
 		if err != nil {
 			return nil, err
 		}
-		pw[i] = byte('0' + v.Int64())
+		x := int(nbig.Int64())
+		chosen := cands[m-1]
+		for j := 0; j < m; j++ {
+			if x < weights[j] {
+				chosen = cands[j]
+				break
+			}
+			x -= weights[j]
+		}
+		c := byte('0' + chosen)
+		pw = append(pw, c)
+		prev2, prev1 = prev1, c
 	}
 	return pw, nil
 }
@@ -147,16 +251,19 @@ func parseFlags(args []string) (digits, count int, err error) {
 }
 
 // generatePINs は弱パターンを除外しつつ、互いに重複しない count 個の PIN を生成する。
+// 構築法（局所制約を満たす並びを重み付き一様サンプリング）で生成し、大域制約の連番だけは
+// 最終 isWeak チェックで除外する（連番は稀なので棄却コストは無視できる）。
 func generatePINs(digits, count int) ([]string, error) {
+	ways := buildTable(digits)
 	seen := make(map[string]bool, count)
 	pins := make([]string, 0, count)
 	for len(pins) < count {
-		pw, err := generate(digits)
+		pw, err := samplePIN(ways, digits)
 		if err != nil {
 			return nil, err
 		}
 		s := string(pw)
-		if isWeak(pw) || seen[s] {
+		if isWeak(pw) || seen[s] { // 連番の除外＋局所実装の保険、および重複排除
 			continue
 		}
 		seen[s] = true
