@@ -116,7 +116,7 @@ func generate(n int) ([]byte, error) {
 // minDigits〜maxDigits の範囲外、または解析不能ならエラーを返す。
 func parseDigits(args []string) (int, error) {
 	fs := flag.NewFlagSet("passcode-gen", flag.ContinueOnError)
-	fs.SetOutput(io.Discard) // usage 出力は抑制し、メッセージは呼び出し側に一本化する
+	fs.SetOutput(io.Discard) // 解析エラー時の自動 usage を抑制（help 時はこの後 stdout に出し直す）
 	var n int
 	fs.IntVar(&n, "digits", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d)", minDigits, maxDigits))
 	fs.IntVar(&n, "d", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d) の短縮形", minDigits, maxDigits))

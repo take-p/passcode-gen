@@ -196,22 +196,25 @@ func TestParseDigits(t *testing.T) {
 // -h / --help は flag.ErrHelp を返し、usage を標準出力へ出すこと（エラー終了ではない）。
 func TestParseDigits_ヘルプ(t *testing.T) {
 	for _, arg := range []string{"-h", "--help"} {
-		orig := os.Stdout
-		r, w, err := os.Pipe()
-		if err != nil {
-			t.Fatalf("os.Pipe: %v", err)
-		}
-		os.Stdout = w
-		_, perr := parseDigits([]string{arg})
-		w.Close()
-		os.Stdout = orig
-		out, _ := io.ReadAll(r)
+		t.Run(arg, func(t *testing.T) {
+			orig := os.Stdout
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatalf("os.Pipe: %v", err)
+			}
+			defer func() { os.Stdout = orig }() // panic 時も含め確実に復元する
+			os.Stdout = w
 
-		if !errors.Is(perr, flag.ErrHelp) {
-			t.Errorf("parseDigits([%q]) は flag.ErrHelp を返すべき: %v", arg, perr)
-		}
-		if !strings.Contains(string(out), "-digits") {
-			t.Errorf("%s の usage に -digits の説明が含まれるべき: %q", arg, out)
-		}
+			_, perr := parseDigits([]string{arg})
+			w.Close()
+			out, _ := io.ReadAll(r)
+
+			if !errors.Is(perr, flag.ErrHelp) {
+				t.Errorf("parseDigits([%q]) は flag.ErrHelp を返すべき: %v", arg, perr)
+			}
+			if !strings.Contains(string(out), "-digits") {
+				t.Errorf("usage に -digits の説明が含まれるべき: %q", out)
+			}
+		})
 	}
 }
