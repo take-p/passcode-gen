@@ -154,47 +154,53 @@ func hasValidPIN(n int) bool {
 	return false
 }
 
-// parseDigits は -d / --digits を解釈し、省略時は defaultDigits、範囲外はエラー。
-func TestParseDigits(t *testing.T) {
+// parseFlags は -d/--digits と -n/--number を解釈し、省略時は既定値、範囲外はエラー。
+func TestParseFlags(t *testing.T) {
 	ok := []struct {
-		args []string
-		want int
+		args       []string
+		wantDigits int
+		wantCount  int
 	}{
-		{nil, defaultDigits},
-		{[]string{"-d", "6"}, 6},
-		{[]string{"--digits", "8"}, 8},
-		{[]string{"-digits", "10"}, 10},
-		{[]string{"-d", "4"}, 4},
+		{nil, defaultDigits, defaultCount},
+		{[]string{"-d", "6"}, 6, defaultCount},
+		{[]string{"--digits", "8"}, 8, defaultCount},
+		{[]string{"-digits", "10"}, 10, defaultCount},
+		{[]string{"-n", "5"}, defaultDigits, 5},
+		{[]string{"--number", "10"}, defaultDigits, 10},
+		{[]string{"-d", "8", "-n", "3"}, 8, 3},
+		{[]string{"-d", "4", "-n", "1"}, 4, 1},
 	}
 	for _, c := range ok {
-		got, err := parseDigits(c.args)
+		d, n, err := parseFlags(c.args)
 		if err != nil {
-			t.Errorf("parseDigits(%v) が予期せぬエラー: %v", c.args, err)
+			t.Errorf("parseFlags(%v) が予期せぬエラー: %v", c.args, err)
 			continue
 		}
-		if got != c.want {
-			t.Errorf("parseDigits(%v) = %d, 期待 %d", c.args, got, c.want)
+		if d != c.wantDigits || n != c.wantCount {
+			t.Errorf("parseFlags(%v) = (桁数%d, 個数%d), 期待 (桁数%d, 個数%d)", c.args, d, n, c.wantDigits, c.wantCount)
 		}
 	}
 
 	ng := [][]string{
-		{"-d", "3"},          // 下限未満
-		{"-d", "11"},         // 上限超過
+		{"-d", "3"},          // 桁数 下限未満
+		{"-d", "11"},         // 桁数 上限超過
 		{"-d", "abc"},        // 非数値
-		{"-d", "0"},          // 下限未満
+		{"-n", "0"},          // 個数 下限未満
+		{"-n", "11"},         // 個数 上限超過
+		{"-n", "abc"},        // 非数値
 		{"6"},                // 位置引数は受け付けない（黙って無視させない）
 		{"6", "-d", "8"},     // 位置引数が先頭にあると後続フラグも解析されない
 		{"-d", "8", "extra"}, // 余分な位置引数
 	}
 	for _, args := range ng {
-		if _, err := parseDigits(args); err == nil {
-			t.Errorf("parseDigits(%v) はエラーになるべき", args)
+		if _, _, err := parseFlags(args); err == nil {
+			t.Errorf("parseFlags(%v) はエラーになるべき", args)
 		}
 	}
 }
 
 // -h / --help は flag.ErrHelp を返し、usage を標準出力へ出すこと（エラー終了ではない）。
-func TestParseDigits_ヘルプ(t *testing.T) {
+func TestParseFlags_ヘルプ(t *testing.T) {
 	for _, arg := range []string{"-h", "--help"} {
 		t.Run(arg, func(t *testing.T) {
 			orig := os.Stdout
@@ -205,16 +211,51 @@ func TestParseDigits_ヘルプ(t *testing.T) {
 			defer func() { os.Stdout = orig }() // panic 時も含め確実に復元する
 			os.Stdout = w
 
-			_, perr := parseDigits([]string{arg})
+			_, _, perr := parseFlags([]string{arg})
 			w.Close()
 			out, _ := io.ReadAll(r)
 
 			if !errors.Is(perr, flag.ErrHelp) {
-				t.Errorf("parseDigits([%q]) は flag.ErrHelp を返すべき: %v", arg, perr)
+				t.Errorf("parseFlags([%q]) は flag.ErrHelp を返すべき: %v", arg, perr)
 			}
-			if !strings.Contains(string(out), "-digits") {
-				t.Errorf("usage に -digits の説明が含まれるべき: %q", out)
+			for _, want := range []string{"-digits", "-number"} {
+				if !strings.Contains(string(out), want) {
+					t.Errorf("usage に %s の説明が含まれるべき: %q", want, out)
+				}
 			}
 		})
+	}
+}
+
+// generatePINs は count 個・桁数一致・非弱・互いに重複しない PIN を返すこと。
+func TestGeneratePINs(t *testing.T) {
+	cases := []struct{ digits, count int }{
+		{defaultDigits, defaultCount}, // 既定（4桁1個）
+		{4, maxCount},                 // 4桁10個（166候補からの重複排除が効く）
+		{6, 5},
+		{maxDigits, 3},
+	}
+	for _, c := range cases {
+		pins, err := generatePINs(c.digits, c.count)
+		if err != nil {
+			t.Errorf("generatePINs(%d,%d) がエラー: %v", c.digits, c.count, err)
+			continue
+		}
+		if len(pins) != c.count {
+			t.Errorf("generatePINs(%d,%d) の件数 = %d, 期待 %d", c.digits, c.count, len(pins), c.count)
+		}
+		seen := make(map[string]bool, len(pins))
+		for _, p := range pins {
+			if len(p) != c.digits {
+				t.Errorf("生成 %q の桁数 = %d, 期待 %d", p, len(p), c.digits)
+			}
+			if isWeak([]byte(p)) {
+				t.Errorf("生成 %q が弱判定される", p)
+			}
+			if seen[p] {
+				t.Errorf("生成 %q が重複している", p)
+			}
+			seen[p] = true
+		}
 	}
 }

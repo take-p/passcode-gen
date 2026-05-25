@@ -14,6 +14,10 @@ const (
 	defaultDigits = 4  // 桁数を省略したときの既定値
 	minDigits     = 4  // 弱パターン判定が成立する下限
 	maxDigits     = 10 // 現実的なPIN長の上限
+
+	defaultCount = 1  // 生成個数を省略したときの既定値
+	minCount     = 1  // 生成個数の下限
+	maxCount     = 10 // 生成個数の上限
 )
 
 // keypad は各数字キーの (行, 列) 座標。iPhone のテンキー配置を表す。
@@ -111,50 +115,71 @@ func generate(n int) ([]byte, error) {
 	return pw, nil
 }
 
-// parseDigits はコマンドライン引数を解析して桁数を返す。
-// -d / --digits で指定でき、省略時は defaultDigits。
-// minDigits〜maxDigits の範囲外、または解析不能ならエラーを返す。
-func parseDigits(args []string) (int, error) {
+// parseFlags はコマンドライン引数を解析して桁数と生成個数を返す。
+// -d / --digits で桁数（省略時 defaultDigits）、-n / --number で個数（省略時 defaultCount）を
+// 指定できる。範囲外・余分な引数・解析不能ならエラーを返す。-h / --help は usage を
+// 標準出力に表示して flag.ErrHelp を返す。
+func parseFlags(args []string) (digits, count int, err error) {
 	fs := flag.NewFlagSet("passcode-gen", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // 解析エラー時の自動 usage を抑制（help 時はこの後 stdout に出し直す）
-	var n int
-	fs.IntVar(&n, "digits", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d)", minDigits, maxDigits))
-	fs.IntVar(&n, "d", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d) の短縮形", minDigits, maxDigits))
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
+	fs.IntVar(&digits, "digits", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d)", minDigits, maxDigits))
+	fs.IntVar(&digits, "d", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d) の短縮形", minDigits, maxDigits))
+	fs.IntVar(&count, "number", defaultCount, fmt.Sprintf("生成する個数 (%d〜%d)", minCount, maxCount))
+	fs.IntVar(&count, "n", defaultCount, fmt.Sprintf("生成する個数 (%d〜%d) の短縮形", minCount, maxCount))
+	if perr := fs.Parse(args); perr != nil {
+		if errors.Is(perr, flag.ErrHelp) {
 			// -h/--help は成功扱い。usage を標準出力へ出して ErrHelp を伝播する。
 			fs.SetOutput(os.Stdout)
 			fs.Usage()
 		}
-		return 0, err
+		return 0, 0, perr
 	}
 	if fs.NArg() > 0 {
-		return 0, fmt.Errorf("余分な引数があります: %v（桁数は -d / --digits で指定してください）", fs.Args())
+		return 0, 0, fmt.Errorf("余分な引数があります: %v（桁数は -d / --digits、個数は -n / --number で指定してください）", fs.Args())
 	}
-	if n < minDigits || n > maxDigits {
-		return 0, fmt.Errorf("桁数は %d〜%d で指定してください: %d", minDigits, maxDigits, n)
+	if digits < minDigits || digits > maxDigits {
+		return 0, 0, fmt.Errorf("桁数は %d〜%d で指定してください: %d", minDigits, maxDigits, digits)
 	}
-	return n, nil
+	if count < minCount || count > maxCount {
+		return 0, 0, fmt.Errorf("生成数は %d〜%d で指定してください: %d", minCount, maxCount, count)
+	}
+	return digits, count, nil
+}
+
+// generatePINs は弱パターンを除外しつつ、互いに重複しない count 個の PIN を生成する。
+func generatePINs(digits, count int) ([]string, error) {
+	seen := make(map[string]bool, count)
+	pins := make([]string, 0, count)
+	for len(pins) < count {
+		pw, err := generate(digits)
+		if err != nil {
+			return nil, err
+		}
+		s := string(pw)
+		if isWeak(pw) || seen[s] {
+			continue
+		}
+		seen[s] = true
+		pins = append(pins, s)
+	}
+	return pins, nil
 }
 
 func main() {
-	n, err := parseDigits(os.Args[1:])
+	digits, count, err := parseFlags(os.Args[1:])
 	if errors.Is(err, flag.ErrHelp) {
-		os.Exit(0) // usage は parseDigits が標準出力に表示済み
+		os.Exit(0) // usage は parseFlags が標準出力に表示済み
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	for {
-		pw, err := generate(n)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "パスワード生成に失敗しました:", err)
-			os.Exit(1)
-		}
-		if !isWeak(pw) {
-			fmt.Println(string(pw))
-			return
-		}
+	pins, err := generatePINs(digits, count)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "パスワード生成に失敗しました:", err)
+		os.Exit(1)
+	}
+	for _, p := range pins {
+		fmt.Println(p)
 	}
 }
