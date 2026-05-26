@@ -1,5 +1,7 @@
 # passcode-gen
 
+[![CI](https://github.com/take-p/passcode-gen/actions/workflows/ci.yml/badge.svg)](https://github.com/take-p/passcode-gen/actions/workflows/ci.yml)
+
 覚えにくく推測されにくい **暗証番号（PIN）** を生成する CLI アプリです。
 デフォルトは 4 桁で、iPhone のペアレンタルコントロールなどを想定しています。
 `-d` / `--digits` で 4〜10 桁の範囲で桁数を指定することもできます。
