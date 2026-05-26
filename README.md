@@ -2,6 +2,132 @@
 
 [![CI](https://github.com/take-p/passcode-gen/actions/workflows/ci.yml/badge.svg)](https://github.com/take-p/passcode-gen/actions/workflows/ci.yml)
 
+**English** | [日本語](#japanese)
+
+`passcode-gen` is a CLI tool that generates **PINs** that are hard to guess yet avoid the
+obvious, easy-to-remember patterns people tend to pick. It defaults to 4 digits (handy for
+things like the iPhone Screen Time passcode), and you can choose 4–10 digits with
+`-d` / `--digits`.
+
+## Features
+
+- Uses `crypto/rand` (a cryptographically secure random source)
+- Excludes patterns that people tend to choose or that are easy to guess
+- Configurable length from 4 to 10 digits (default 4)
+- No dependencies (Go standard library only)
+
+## Installation
+
+With a Go toolchain installed:
+
+```sh
+go install github.com/take-p/passcode-gen@latest
+```
+
+The `passcode-gen` binary is placed in `$(go env GOPATH)/bin`. Add that directory to your
+`PATH` to run `passcode-gen` from anywhere.
+
+## Usage
+
+Each run prints PINs that satisfy the rules. Length defaults to 4 digits and count defaults to 1.
+
+```sh
+passcode-gen            # one 4-digit PIN (default)
+passcode-gen -d 6       # one 6-digit PIN
+passcode-gen --digits 8 # one 8-digit PIN
+passcode-gen -n 5       # five 4-digit PINs (all distinct)
+passcode-gen -d 6 -n 3  # three 6-digit PINs
+passcode-gen -h         # show usage (option list)
+```
+
+Length is set with `-d` / `--digits` (**4–10 digits**) and count with `-n` / `--number`
+(**1–100**). When you request multiple PINs, all of them are distinct (no duplicates).
+Length and count must be passed through these flags — a positional argument such as
+`passcode-gen 6` is rejected. Out-of-range values, non-numeric values, or extra arguments
+print an error and exit with code 2.
+
+> The weak-pattern rules assume at least 4 digits, so 4 is the minimum length.
+
+To run or build from a cloned repository:
+
+```sh
+go run .                 # run in place
+go build -o passcode-gen # build a binary
+./passcode-gen
+```
+
+## Short alias
+
+`passcode-gen` is a long name, so a shell alias lets you run it with fewer keystrokes. Add the
+following line to `~/.zshrc` (or `~/.bashrc` for bash):
+
+```sh
+alias pscd-gen='passcode-gen'
+```
+
+After reloading your shell config you can run it as `pscd-gen`:
+
+```sh
+source ~/.zshrc   # reload (or just open a new shell)
+pscd-gen
+```
+
+## Excluded patterns
+
+A number that matches any of the rules below is considered "weak" and is regenerated until it
+no longer matches.
+
+| Rule | Description | Examples |
+| --- | --- | --- |
+| Consecutive identical digits | Neighboring digits are the same (includes all-same) | `6000`, `8110`, `0000` |
+| Sequential | Ascending or descending run | `1234`, `4321`, `0123` |
+| Every-other repeat | The i-th and (i+2)-th digits match (same as two places back) | `1212`, `9494`, `0161`, `016010` |
+| Keypad-adjacent | Digits next to each other on the keypad (including diagonals) | `1236`, `1478` |
+| Corner-to-corner | Two consecutive digits are both corner keys `1/3/7/9` (incl. diagonal) | `1300`, `1700`, `3700` |
+| 2↔0 | Two consecutive digits are `2` and `0` (either order) | `2099`, `8023` |
+
+### Keypad layout
+
+Adjacency is based on the iPhone numeric keypad layout.
+
+```
+1 2 3
+4 5 6
+7 8 9
+  0
+```
+
+- Adjacent = up/down/left/right plus diagonals (a chess king's move)
+- `0` is treated as directly below `8`, so it is adjacent to `8` (directly above) and to
+  `7` / `9` (diagonally)
+
+## Number of valid PINs (4 digits)
+
+For 4 digits, out of all 10000 combinations (0000–9999), **166** satisfy every rule above.
+Increasing the length raises the absolute number of valid combinations, but the proportion
+(hit rate) drops (for reference: about 1.7% at 4 digits, about 0.0005% at 10 digits). The
+rules being public narrows the candidate space, but devices and services that use PINs
+normally enforce **attempt limits**, so brute force is not a practical concern.
+
+## Testing
+
+```sh
+go test ./...
+```
+
+This checks each exclusion rule and verifies the valid count by exhaustive enumeration
+(166 for 4 digits).
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+---
+
+<a id="japanese"></a>
+
+[English](#passcode-gen) | **日本語**
+
 覚えにくく推測されにくい **暗証番号（PIN）** を生成する CLI アプリです。
 デフォルトは 4 桁で、iPhone のペアレンタルコントロールなどを想定しています。
 `-d` / `--digits` で 4〜10 桁の範囲で桁数を指定することもできます。
