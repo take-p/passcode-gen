@@ -271,6 +271,7 @@ func TestParseFlags(t *testing.T) {
 		{[]string{"--number", "10"}, defaultDigits, 10},
 		{[]string{"-d", "8", "-n", "3"}, 8, 3},
 		{[]string{"-d", "4", "-n", "1"}, 4, 1},
+		{[]string{"-n", "100"}, defaultDigits, 100}, // 上限ちょうど
 	}
 	for _, c := range ok {
 		d, n, err := parseFlags(c.args)
@@ -288,7 +289,7 @@ func TestParseFlags(t *testing.T) {
 		{"-d", "11"},         // 桁数 上限超過
 		{"-d", "abc"},        // 非数値
 		{"-n", "0"},          // 個数 下限未満
-		{"-n", "11"},         // 個数 上限超過
+		{"-n", "101"},        // 個数 上限超過
 		{"-n", "abc"},        // 非数値
 		{"6"},                // 位置引数は受け付けない（黙って無視させない）
 		{"6", "-d", "8"},     // 位置引数が先頭にあると後続フラグも解析されない

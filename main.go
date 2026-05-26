@@ -15,9 +15,9 @@ const (
 	minDigits     = 4  // 弱パターン判定が成立する下限
 	maxDigits     = 10 // 現実的なPIN長の上限
 
-	defaultCount = 1  // 生成個数を省略したときの既定値
-	minCount     = 1  // 生成個数の下限
-	maxCount     = 10 // 生成個数の上限
+	defaultCount = 1   // 生成個数を省略したときの既定値
+	minCount     = 1   // 生成個数の下限
+	maxCount     = 100 // 生成個数の上限（最小候補数 166（4桁）未満なので重複排除が常に成立）
 )
 
 // keypad は各数字キーの (行, 列) 座標。iPhone のテンキー配置を表す。
