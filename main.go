@@ -267,6 +267,8 @@ func runStepMode(pin string) error {
 	}
 	defer tty.Close()
 
+	fmt.Println("[Enter] 次の桁  [ESC / Ctrl+C] 終了")
+
 	fd := int(tty.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
@@ -276,7 +278,6 @@ func runStepMode(pin string) error {
 
 	n := len(pin)
 	i := 0
-	fmt.Println("[Enter] 次の桁  [ESC / Ctrl+C] 終了")
 	fmt.Printf("%c  (%d/%d)", pin[i], i+1, n)
 
 	buf := make([]byte, 1)
