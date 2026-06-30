@@ -252,8 +252,14 @@ func parseFlags(args []string) (digits, count int, stepMode bool, err error) {
 	if count < minCount || count > maxCount {
 		return 0, 0, false, fmt.Errorf("生成数は %d〜%d で指定してください: %d", minCount, maxCount, count)
 	}
-	if stepMode {
-		count = 1
+	var numberExplicit bool
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "n" || f.Name == "number" {
+			numberExplicit = true
+		}
+	})
+	if stepMode && numberExplicit {
+		return 0, 0, false, fmt.Errorf("-s / --step と -n / --number は同時に指定できません")
 	}
 	return digits, count, stepMode, nil
 }

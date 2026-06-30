@@ -340,7 +340,6 @@ func TestParseFlags_ステップモード(t *testing.T) {
 		{[]string{"--step"}, defaultDigits},
 		{[]string{"-step"}, defaultDigits},
 		{[]string{"-s", "-d", "6"}, 6},
-		{[]string{"-s", "-n", "5"}, defaultDigits}, // -n は無視されて count=1 になる
 	}
 	for _, c := range cases {
 		d, count, step, err := parseFlags(c.args)
@@ -356,6 +355,17 @@ func TestParseFlags_ステップモード(t *testing.T) {
 		}
 		if count != 1 {
 			t.Errorf("parseFlags(%v): count=%d、ステップモードは 1 を期待", c.args, count)
+		}
+	}
+
+	// -s と -n の併用はエラーになること
+	for _, args := range [][]string{
+		{"-s", "-n", "5"},
+		{"-s", "--number", "3"},
+		{"--step", "-n", "1"},
+	} {
+		if _, _, _, err := parseFlags(args); err == nil {
+			t.Errorf("parseFlags(%v) はエラーになるべき", args)
 		}
 	}
 }
