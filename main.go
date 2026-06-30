@@ -8,6 +8,8 @@ import (
 	"io"
 	"math/big"
 	"os"
+
+	"golang.org/x/term"
 )
 
 const (
@@ -219,35 +221,77 @@ func samplePIN(ways [][11][11]int, digits int) ([]byte, error) {
 	return pw, nil
 }
 
-// parseFlags はコマンドライン引数を解析して桁数と生成個数を返す。
-// -d / --digits で桁数（省略時 defaultDigits）、-n / --number で個数（省略時 defaultCount）を
-// 指定できる。範囲外・余分な引数・解析不能ならエラーを返す。-h / --help は usage を
+// parseFlags はコマンドライン引数を解析して桁数・生成個数・ステップモードを返す。
+// -d / --digits で桁数（省略時 defaultDigits）、-n / --number で個数（省略時 defaultCount）、
+// -s / --step でステップ表示モードを指定できる。ステップモード時は count を 1 に強制する。
+// 範囲外・余分な引数・解析不能ならエラーを返す。-h / --help は usage を
 // 標準出力に表示して flag.ErrHelp を返す。
-func parseFlags(args []string) (digits, count int, err error) {
+func parseFlags(args []string) (digits, count int, stepMode bool, err error) {
 	fs := flag.NewFlagSet("passcode-gen", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // 解析エラー時の自動 usage を抑制（help 時はこの後 stdout に出し直す）
 	fs.IntVar(&digits, "digits", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d)", minDigits, maxDigits))
 	fs.IntVar(&digits, "d", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d) の短縮形", minDigits, maxDigits))
 	fs.IntVar(&count, "number", defaultCount, fmt.Sprintf("生成する個数 (%d〜%d)", minCount, maxCount))
 	fs.IntVar(&count, "n", defaultCount, fmt.Sprintf("生成する個数 (%d〜%d) の短縮形", minCount, maxCount))
+	fs.BoolVar(&stepMode, "step", false, "1桁ずつ表示するステップモードで実行する")
+	fs.BoolVar(&stepMode, "s", false, "ステップモードの短縮形")
 	if perr := fs.Parse(args); perr != nil {
 		if errors.Is(perr, flag.ErrHelp) {
 			// -h/--help は成功扱い。usage を標準出力へ出して ErrHelp を伝播する。
 			fs.SetOutput(os.Stdout)
 			fs.Usage()
 		}
-		return 0, 0, perr
+		return 0, 0, false, perr
 	}
 	if fs.NArg() > 0 {
-		return 0, 0, fmt.Errorf("余分な引数があります: %v（桁数は -d / --digits、個数は -n / --number で指定してください）", fs.Args())
+		return 0, 0, false, fmt.Errorf("余分な引数があります: %v（桁数は -d / --digits、個数は -n / --number で指定してください）", fs.Args())
 	}
 	if digits < minDigits || digits > maxDigits {
-		return 0, 0, fmt.Errorf("桁数は %d〜%d で指定してください: %d", minDigits, maxDigits, digits)
+		return 0, 0, false, fmt.Errorf("桁数は %d〜%d で指定してください: %d", minDigits, maxDigits, digits)
 	}
 	if count < minCount || count > maxCount {
-		return 0, 0, fmt.Errorf("生成数は %d〜%d で指定してください: %d", minCount, maxCount, count)
+		return 0, 0, false, fmt.Errorf("生成数は %d〜%d で指定してください: %d", minCount, maxCount, count)
 	}
-	return digits, count, nil
+	if stepMode {
+		count = 1
+	}
+	return digits, count, stepMode, nil
+}
+
+// runStepMode は PIN を1桁ずつ表示するインタラクティブモードを実行する。
+// Enter で次桁へ進み（最終桁の後は先頭に戻る）、ESC または Ctrl+C で終了する。
+func runStepMode(pin string) error {
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		return fmt.Errorf("ターミナルを開けません: %w", err)
+	}
+	defer tty.Close()
+
+	fd := int(tty.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return fmt.Errorf("ターミナルをrawモードにできません: %w", err)
+	}
+	defer term.Restore(fd, oldState) //nolint:errcheck
+
+	n := len(pin)
+	i := 0
+	fmt.Printf("%c  (%d/%d)", pin[i], i+1, n)
+
+	buf := make([]byte, 1)
+	for {
+		if _, err := tty.Read(buf); err != nil {
+			return err
+		}
+		switch buf[0] {
+		case 0x1b, 0x03: // ESC または Ctrl+C
+			fmt.Print("\r\033[K")
+			return nil
+		case 0x0d: // Enter (rawモードでは CR)
+			i = (i + 1) % n
+			fmt.Printf("\r%c  (%d/%d)\033[K", pin[i], i+1, n)
+		}
+	}
 }
 
 // generatePINs は弱パターンを除外しつつ、互いに重複しない count 個の PIN を生成する。
@@ -273,7 +317,7 @@ func generatePINs(digits, count int) ([]string, error) {
 }
 
 func main() {
-	digits, count, err := parseFlags(os.Args[1:])
+	digits, count, stepMode, err := parseFlags(os.Args[1:])
 	if errors.Is(err, flag.ErrHelp) {
 		os.Exit(0) // usage は parseFlags が標準出力に表示済み
 	}
@@ -285,6 +329,14 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "パスワード生成に失敗しました:", err)
 		os.Exit(1)
+	}
+	if stepMode {
+		if err := runStepMode(pins[0]); err != nil {
+			fmt.Fprintln(os.Stderr, "ステップ表示中にエラーが発生しました:", err)
+			os.Exit(1)
+		}
+		fmt.Println()
+		return
 	}
 	for _, p := range pins {
 		fmt.Println(p)

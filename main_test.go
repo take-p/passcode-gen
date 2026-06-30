@@ -274,7 +274,7 @@ func TestParseFlags(t *testing.T) {
 		{[]string{"-n", "100"}, defaultDigits, 100}, // 上限ちょうど
 	}
 	for _, c := range ok {
-		d, n, err := parseFlags(c.args)
+		d, n, _, err := parseFlags(c.args)
 		if err != nil {
 			t.Errorf("parseFlags(%v) が予期せぬエラー: %v", c.args, err)
 			continue
@@ -296,7 +296,7 @@ func TestParseFlags(t *testing.T) {
 		{"-d", "8", "extra"}, // 余分な位置引数
 	}
 	for _, args := range ng {
-		if _, _, err := parseFlags(args); err == nil {
+		if _, _, _, err := parseFlags(args); err == nil {
 			t.Errorf("parseFlags(%v) はエラーになるべき", args)
 		}
 	}
@@ -314,7 +314,7 @@ func TestParseFlags_ヘルプ(t *testing.T) {
 			defer func() { os.Stdout = orig }() // panic 時も含め確実に復元する
 			os.Stdout = w
 
-			_, _, perr := parseFlags([]string{arg})
+			_, _, _, perr := parseFlags([]string{arg})
 			w.Close()
 			out, _ := io.ReadAll(r)
 
@@ -327,6 +327,36 @@ func TestParseFlags_ヘルプ(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// parseFlags は -s/--step を解釈し、ステップモード時は count を 1 に強制すること。
+func TestParseFlags_ステップモード(t *testing.T) {
+	cases := []struct {
+		args       []string
+		wantDigits int
+	}{
+		{[]string{"-s"}, defaultDigits},
+		{[]string{"--step"}, defaultDigits},
+		{[]string{"-step"}, defaultDigits},
+		{[]string{"-s", "-d", "6"}, 6},
+		{[]string{"-s", "-n", "5"}, defaultDigits}, // -n は無視されて count=1 になる
+	}
+	for _, c := range cases {
+		d, count, step, err := parseFlags(c.args)
+		if err != nil {
+			t.Errorf("parseFlags(%v) が予期せぬエラー: %v", c.args, err)
+			continue
+		}
+		if !step {
+			t.Errorf("parseFlags(%v): stepMode=false、true を期待", c.args)
+		}
+		if d != c.wantDigits {
+			t.Errorf("parseFlags(%v): digits=%d、期待 %d", c.args, d, c.wantDigits)
+		}
+		if count != 1 {
+			t.Errorf("parseFlags(%v): count=%d、ステップモードは 1 を期待", c.args, count)
+		}
 	}
 }
 
