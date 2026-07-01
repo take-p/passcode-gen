@@ -124,6 +124,9 @@ comma lists (`土,日`) can be combined.
    - First run → request is recorded; re-run after the delay expires (and while in-schedule)
    - Timer still running → shows remaining time
    - Timer expired → action proceeds; pending is cleared
+   - Timer expired but left unattended for longer than the delay itself → the request **goes
+     stale** and a new request is recorded instead (applies to log viewing, `config set`, and
+     `config disable` alike)
 3. No delay, schedule only → allowed immediately whenever you're in-schedule
 
 > **Warning:** `~/.passcode-gen/config.bin` stores the salt used to encrypt `log.bin`.
@@ -323,6 +326,8 @@ passcode-gen config disable
    - 初回実行 → 要求を記録。遅延後・スケジュール内で再実行すると表示
    - タイマー待機中 → 残り時間を表示
    - タイマー切れ → 表示して保留クリア
+   - タイマー切れ後、遅延時間と同じ長さを超えて放置 → 要求が**失効**し、新規要求として
+     再作成される（log 閲覧・`config set`・`config disable` すべてに適用）
 3. 遅延なし・スケジュールのみ → スケジュール内なら即時表示
 
 > **注意:** `~/.passcode-gen/config.bin` を削除すると `log.bin` も永久に復号できなくなります。

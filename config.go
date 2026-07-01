@@ -419,12 +419,17 @@ const (
 	gateNeedsNewPending                   // 保留なし・新規作成が必要
 	gateWaiting                           // 保留あり・タイマー未切れ
 	gateExpired                           // 保留あり・タイマー切れ・実行可能
+	gateStale                             // 保留あり・実行可能な状態のまま長時間放置され失効・再要求が必要
 )
 
 // evaluateDelayGate はスケジュール・遅延に基づく可否判定を行う共通ロジック。
 // PendingReq（閲覧・解除要求）と PendingCfg（設定変更要求）の両方から共有される。
 //
 // B案ルール: スケジュールは常に最優先。スケジュール外なら、タイマー状態によらず常に却下。
+//
+// タイマーが切れて実行可能になった後も、要求時点の遅延時間（pendingDelaySeconds）と同じ
+// 長さの猶予期間内に実行されなければ失効（gateStale）とみなし、再要求を必要とする。
+// これにより「実行可能な状態を長時間放置したら再度制限がかかる」を実現する。
 func evaluateDelayGate(schedules []Schedule, delaySeconds int, hasPending bool, requestedAt time.Time, pendingDelaySeconds int, now time.Time) (gateResult, time.Duration) {
 	if len(schedules) > 0 && !inSchedule(schedules, now) {
 		return gateOutOfSchedule, 0
@@ -438,6 +443,11 @@ func evaluateDelayGate(schedules []Schedule, delaySeconds int, hasPending bool, 
 	remaining := time.Duration(pendingDelaySeconds)*time.Second - now.Sub(requestedAt)
 	if remaining > 0 {
 		return gateWaiting, remaining
+	}
+	graceWindow := time.Duration(pendingDelaySeconds) * time.Second
+	staleFor := -remaining
+	if staleFor > graceWindow {
+		return gateStale, 0
 	}
 	return gateExpired, 0
 }
@@ -473,6 +483,11 @@ func gateCheck(c *Config, pending **PendingReq, now time.Time) (proceed bool, ne
 	case gateWaiting:
 		return false, false, fmt.Sprintf("あと約%d分で実行可能です（%s以降）。",
 			roundUpMinutes(remaining), now.Add(remaining).Format("15:04"))
+	case gateStale:
+		*pending = &PendingReq{RequestedAt: now, DelaySeconds: c.DelaySeconds}
+		t := now.Add(time.Duration(c.DelaySeconds) * time.Second)
+		return false, true, fmt.Sprintf("実行可能な状態のまま長時間放置されたため要求が失効しました。再度要求を受け付けました。%d分後（%s以降）にスケジュール内で再実行してください。",
+			c.DelaySeconds/60, t.Format("15:04"))
 	default: // gateExpired
 		*pending = nil
 		return true, true, ""
@@ -503,7 +518,11 @@ config set のオプション:
   "土,日 10:00-12:00"    土日 10〜12時
   ※ 曜日は英語 (Mon-Sun) でも指定可 / レンジ・カンマ混在可
 
-注意: config.bin を削除するとログ (log.bin) も永久に復号できなくなります。
+注意:
+  - config.bin を削除するとログ (log.bin) も永久に復号できなくなります。
+  - 遅延タイマーが切れて実行可能になった後も、遅延時間と同じ長さの猶予期間を
+    超えて放置すると要求は失効し、再度要求からやり直しになります
+    （log 閲覧・設定変更・制限解除のすべてに適用）。
 `
 
 func runConfigCmd(args []string) error {
@@ -558,17 +577,27 @@ func showConfigCmd() error {
 	return nil
 }
 
+// pendingStatusText は残り時間・要求時点の遅延秒数から表示用の状態文字列を返す。
+// 実行可能になった後も猶予期間（要求時点の遅延と同じ長さ）を超えて放置されると
+// 「失効」とみなす（gateStale と同じ基準）。
+func pendingStatusText(remaining time.Duration, pendingDelaySeconds int, now time.Time) string {
+	if remaining > 0 {
+		return fmt.Sprintf("あと約%d分（%s以降）", roundUpMinutes(remaining), now.Add(remaining).Format("15:04"))
+	}
+	graceWindow := time.Duration(pendingDelaySeconds) * time.Second
+	if -remaining > graceWindow {
+		return "失効済み（実行可能な状態のまま長時間放置されたため。次回実行時に再要求されます）"
+	}
+	return "実行可能（スケジュール内で再実行してください）"
+}
+
 func printPendingReq(label string, p *PendingReq, now time.Time) {
 	if p == nil {
 		fmt.Printf("保留中の%s: なし\n", label)
 		return
 	}
 	remaining := time.Duration(p.DelaySeconds)*time.Second - now.Sub(p.RequestedAt)
-	if remaining > 0 {
-		fmt.Printf("保留中の%s: あと約%d分（%s以降）\n", label, roundUpMinutes(remaining), now.Add(remaining).Format("15:04"))
-	} else {
-		fmt.Printf("保留中の%s: 実行可能（スケジュール内で再実行してください）\n", label)
-	}
+	fmt.Printf("保留中の%s: %s\n", label, pendingStatusText(remaining, p.DelaySeconds, now))
 }
 
 func printPendingCfg(p *PendingCfg, now time.Time) {
@@ -577,11 +606,7 @@ func printPendingCfg(p *PendingCfg, now time.Time) {
 		return
 	}
 	remaining := time.Duration(p.WaitSeconds)*time.Second - now.Sub(p.RequestedAt)
-	if remaining > 0 {
-		fmt.Printf("保留中の設定変更: あと約%d分（%s以降）\n", roundUpMinutes(remaining), now.Add(remaining).Format("15:04"))
-	} else {
-		fmt.Println("保留中の設定変更: 実行可能（スケジュール内で再実行してください）")
-	}
+	fmt.Printf("保留中の設定変更: %s\n", pendingStatusText(remaining, p.WaitSeconds, now))
 }
 
 // configSet は閲覧制限を設定する。
@@ -640,16 +665,6 @@ func configSet(args []string) error {
 		return nil
 	}
 
-	// 指定されなかった側は既存設定を維持する（他方だけを黙って0/nilに戻さない）
-	effectiveDelay := c.DelaySeconds
-	if delayStr != "" {
-		effectiveDelay = delayGiven
-	}
-	effectiveSchedules := c.Schedules
-	if len(scheduleStrs) > 0 {
-		effectiveSchedules = schedulesGiven
-	}
-
 	now := time.Now()
 	var hasPending bool
 	var requestedAt time.Time
@@ -661,6 +676,23 @@ func configSet(args []string) error {
 	}
 
 	result, _ := evaluateDelayGate(c.Schedules, c.DelaySeconds, hasPending, requestedAt, pendingWait, now)
+
+	// 指定されなかった側は既存設定を維持する（他方だけを黙って0/nilに戻さない）。
+	// gateWaiting（保留がまだ有効）の場合は、現在アクティブな設定ではなく、
+	// 既にステージ済みの保留内容を基準にする（そうしないと保留中の未適用の変更が
+	// 「後勝ち」上書きで消えてしまう）。
+	baseDelay, baseSchedules := c.DelaySeconds, c.Schedules
+	if result == gateWaiting {
+		baseDelay, baseSchedules = c.PendingConfig.NewDelaySeconds, c.PendingConfig.NewSchedules
+	}
+	effectiveDelay := baseDelay
+	if delayStr != "" {
+		effectiveDelay = delayGiven
+	}
+	effectiveSchedules := baseSchedules
+	if len(scheduleStrs) > 0 {
+		effectiveSchedules = schedulesGiven
+	}
 	switch result {
 	case gateOutOfSchedule:
 		fmt.Println(scheduleOutMsg(c.Schedules, now))
@@ -686,6 +718,21 @@ func configSet(args []string) error {
 			return err
 		}
 		fmt.Printf("変更を受け付けました。%d分後（%s以降）にスケジュール内で再実行してください。\n",
+			c.DelaySeconds/60, t.Format("15:04"))
+		return nil
+	case gateStale:
+		// 実行可能な状態のまま長時間放置され失効 → 新規要求として再作成
+		c.PendingConfig = &PendingCfg{
+			RequestedAt:     now,
+			WaitSeconds:     c.DelaySeconds,
+			NewDelaySeconds: effectiveDelay,
+			NewSchedules:    effectiveSchedules,
+		}
+		t := now.Add(time.Duration(c.DelaySeconds) * time.Second)
+		if err := saveConfig(c); err != nil {
+			return err
+		}
+		fmt.Printf("実行可能な状態のまま長時間放置されたため要求が失効しました。再度要求を受け付けました。%d分後（%s以降）にスケジュール内で再実行してください。\n",
 			c.DelaySeconds/60, t.Format("15:04"))
 		return nil
 	case gateWaiting:

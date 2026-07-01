@@ -557,6 +557,20 @@ func TestGateCheck(t *testing.T) {
 			pending:   &PendingReq{RequestedAt: now.Add(-31 * time.Minute), DelaySeconds: 1800},
 			wantAllow: true, wantChange: true,
 		},
+		{
+			// 遅延30分・タイマー切れから35分放置（猶予期間=遅延時間の30分を超過）→ 失効・再要求
+			name:      "遅延のみ・実行可能を長時間放置→失効し再要求",
+			cfg:       Config{DelaySeconds: 1800},
+			pending:   &PendingReq{RequestedAt: now.Add(-65 * time.Minute), DelaySeconds: 1800},
+			wantAllow: false, wantChange: true,
+		},
+		{
+			// タイマー切れ直後（猶予期間内）はまだ失効しない
+			name:      "遅延のみ・タイマー切れ直後は猶予期間内なので失効しない",
+			cfg:       Config{DelaySeconds: 1800},
+			pending:   &PendingReq{RequestedAt: now.Add(-59 * time.Minute), DelaySeconds: 1800},
+			wantAllow: true, wantChange: true,
+		},
 	}
 
 	for _, c := range cases {
@@ -614,6 +628,49 @@ func TestConfigSet_未指定項目は維持される(t *testing.T) {
 	}
 	if len(c.PendingConfig.NewSchedules) != 1 {
 		t.Errorf("保留中の設定変更の NewSchedules 件数 = %d, 期待 1", len(c.PendingConfig.NewSchedules))
+	}
+}
+
+// configSet は「保留中（タイマー待機中）に片方だけを指定して更新」した場合、
+// 保留中にステージ済みのもう片方の値を維持すること（現在アクティブな設定に
+// 巻き戻さない）（回帰テスト）。
+func TestConfigSet_保留中の後勝ち更新は既存の保留内容を維持する(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// 初回適用: delay=30分（即時適用）
+	if err := configSet([]string{"--delay", "30m"}); err != nil {
+		t.Fatalf("1回目の configSet がエラー: %v", err)
+	}
+
+	// delay を 1時間へ変更要求 → 保留作成（NewDelaySeconds=3600）
+	if err := configSet([]string{"--delay", "1h"}); err != nil {
+		t.Fatalf("2回目の configSet がエラー: %v", err)
+	}
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig がエラー: %v", err)
+	}
+	if c.PendingConfig == nil || c.PendingConfig.NewDelaySeconds != 3600 {
+		t.Fatalf("2回目後の保留 NewDelaySeconds = %v, 期待 3600", c.PendingConfig)
+	}
+
+	// タイマー待機中に schedule のみ追加指定 → 保留中の NewDelaySeconds(3600) が
+	// 維持されるべき（現在アクティブな DelaySeconds(1800) に巻き戻ってはいけない）
+	if err := configSet([]string{"--schedule", "月-金 09:00-18:00"}); err != nil {
+		t.Fatalf("3回目の configSet がエラー: %v", err)
+	}
+	c, err = loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig がエラー: %v", err)
+	}
+	if c.PendingConfig == nil {
+		t.Fatal("3回目後も保留が存在するはず")
+	}
+	if c.PendingConfig.NewDelaySeconds != 3600 {
+		t.Errorf("3回目後の NewDelaySeconds = %d, 期待 3600（保留中の1時間への変更が維持されるべき）", c.PendingConfig.NewDelaySeconds)
+	}
+	if len(c.PendingConfig.NewSchedules) != 1 {
+		t.Errorf("3回目後の NewSchedules 件数 = %d, 期待 1", len(c.PendingConfig.NewSchedules))
 	}
 }
 
