@@ -221,6 +221,34 @@ func samplePIN(ways [][11][11]int, digits int) ([]byte, error) {
 	return pw, nil
 }
 
+const mainUsageText = `使い方: passcode-gen [オプション]
+       passcode-gen log
+       passcode-gen config [show | set ... | disable | help]
+       passcode-gen help
+
+オプション:`
+
+// printMainHelp はサブコマンドを含む包括的なヘルプを標準出力へ出力する。
+func printMainHelp() {
+	fmt.Println(mainUsageText)
+	flag.CommandLine.SetOutput(os.Stdout)
+	// 個別の FlagSet を使うのでここでは手動でオプションを列挙する
+	fmt.Printf("  -d, --digits <桁数>   生成する桁数 (%d〜%d, 省略時 %d)\n", minDigits, maxDigits, defaultDigits)
+	fmt.Printf("  -n, --number <個数>   生成する個数 (%d〜%d, 省略時 %d)\n", minCount, maxCount, defaultCount)
+	fmt.Println("  -s, --step            1桁ずつ表示するステップモード")
+	fmt.Println()
+	fmt.Println("サブコマンド:")
+	fmt.Println("  log                   過去に生成したパスコードを表示")
+	fmt.Println("  config                閲覧制限の設定・確認・解除")
+	fmt.Println("  help                  このヘルプを表示")
+	fmt.Println()
+	fmt.Println("スケジュール書式例 (passcode-gen config set --schedule ...):")
+	fmt.Println("  \"日 09:00-11:00\"     日曜 9〜11時")
+	fmt.Println("  \"月-金 20:00-22:00\"  平日 20〜22時")
+	fmt.Println("  \"土,日 10:00-12:00\"  土日 10〜12時")
+	fmt.Println("  ※ 曜日は英語 (Mon-Sun) でも指定可")
+}
+
 // parseFlags はコマンドライン引数を解析して桁数・生成個数・ステップモードを返す。
 // -d / --digits で桁数（省略時 defaultDigits）、-n / --number で個数（省略時 defaultCount）、
 // -s / --step でステップ表示モードを指定できる。ステップモード時は count を 1 に強制する。
@@ -229,6 +257,15 @@ func samplePIN(ways [][11][11]int, digits int) ([]byte, error) {
 func parseFlags(args []string) (digits, count int, stepMode bool, err error) {
 	fs := flag.NewFlagSet("passcode-gen", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // 解析エラー時の自動 usage を抑制（help 時はこの後 stdout に出し直す）
+	fs.Usage = func() {
+		w := fs.Output()
+		fmt.Fprintln(w, mainUsageText)
+		fs.PrintDefaults()
+		fmt.Fprintln(w, "\nサブコマンド:")
+		fmt.Fprintln(w, "  log     過去に生成したパスコードを表示")
+		fmt.Fprintln(w, "  config  閲覧制限の設定・確認・解除")
+		fmt.Fprintln(w, "  help    このヘルプを表示")
+	}
 	fs.IntVar(&digits, "digits", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d)", minDigits, maxDigits))
 	fs.IntVar(&digits, "d", defaultDigits, fmt.Sprintf("生成する桁数 (%d〜%d) の短縮形", minDigits, maxDigits))
 	fs.IntVar(&count, "number", defaultCount, fmt.Sprintf("生成する個数 (%d〜%d)", minCount, maxCount))
@@ -325,12 +362,24 @@ func generatePINs(digits, count int) ([]string, error) {
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "log" {
-		if err := runLogView(); err != nil {
-			fmt.Fprintln(os.Stderr, "ログの表示に失敗しました:", err)
-			os.Exit(1)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "log":
+			if err := runLogView(); err != nil {
+				fmt.Fprintln(os.Stderr, "ログの表示に失敗しました:", err)
+				os.Exit(1)
+			}
+			return
+		case "config":
+			if err := runConfigCmd(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		case "help":
+			printMainHelp()
+			return
 		}
-		return
 	}
 
 	digits, count, stepMode, err := parseFlags(os.Args[1:])

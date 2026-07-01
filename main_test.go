@@ -7,8 +7,10 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 各除外ルールに該当する「弱い」暗証番号は isWeak が true を返すこと。
@@ -367,6 +369,251 @@ func TestParseFlags_ステップモード(t *testing.T) {
 		if _, _, _, err := parseFlags(args); err == nil {
 			t.Errorf("parseFlags(%v) はエラーになるべき", args)
 		}
+	}
+}
+
+// ---- スケジュールパース ----
+
+// parseSchedule は正しい書式の文字列を Schedule に変換できること。
+func TestParseSchedule_正常系(t *testing.T) {
+	cases := []struct {
+		input     string
+		wantDays  []int
+		wantStart string
+		wantEnd   string
+	}{
+		// 単一曜日（日本語）
+		{"日 09:00-11:00", []int{0}, "09:00", "11:00"},
+		// 単一曜日（英語）
+		{"Sun 09:00-11:00", []int{0}, "09:00", "11:00"},
+		// レンジ（月-金）
+		{"月-金 20:00-22:00", []int{1, 2, 3, 4, 5}, "20:00", "22:00"},
+		// レンジ（Mon-Fri）
+		{"Mon-Fri 20:00-22:00", []int{1, 2, 3, 4, 5}, "20:00", "22:00"},
+		// 週末レンジ（土-日）: 内部順序 5→6 で日曜が末尾に来る
+		{"土-日 10:00-12:00", []int{6, 0}, "10:00", "12:00"},
+		{"Sat-Sun 10:00-12:00", []int{6, 0}, "10:00", "12:00"},
+		// カンマ区切り
+		{"土,日 10:00-12:00", []int{6, 0}, "10:00", "12:00"},
+		// 全曜日
+		{"月-日 00:00-23:59", []int{1, 2, 3, 4, 5, 6, 0}, "00:00", "23:59"},
+		// 余分なスペースはトリムされる
+		{"水  14:00-16:00", []int{3}, "14:00", "16:00"},
+	}
+	for _, c := range cases {
+		t.Run(c.input, func(t *testing.T) {
+			got, err := parseSchedule(c.input)
+			if err != nil {
+				t.Fatalf("parseSchedule(%q) がエラー: %v", c.input, err)
+			}
+			if !reflect.DeepEqual(got.Days, c.wantDays) {
+				t.Errorf("Days = %v, 期待 %v", got.Days, c.wantDays)
+			}
+			if got.Start != c.wantStart || got.End != c.wantEnd {
+				t.Errorf("時刻 = %s-%s, 期待 %s-%s", got.Start, got.End, c.wantStart, c.wantEnd)
+			}
+		})
+	}
+}
+
+// parseSchedule は不正な書式でエラーを返すこと。
+func TestParseSchedule_エラー系(t *testing.T) {
+	ng := []string{
+		"月-金",             // 時刻なし
+		"20:00-22:00",     // 曜日なし
+		"Xxx 20:00-22:00", // 不明な曜日
+		"月 20:00",         // 終了時刻なし
+		"月 25:00-22:00",   // 無効な時刻
+		"月 20:00-61:00",   // 無効な時刻
+		"",                // 空文字
+	}
+	for _, s := range ng {
+		if _, err := parseSchedule(s); err == nil {
+			t.Errorf("parseSchedule(%q) はエラーになるべき", s)
+		}
+	}
+}
+
+// inSchedule は時刻・曜日ごとに正しく true/false を返すこと。
+func TestInSchedule(t *testing.T) {
+	// 2026-06-29(月), 2026-06-30(火), 2026-07-01(水), 2026-07-04(土), 2026-07-05(日)
+	mon := time.Date(2026, 6, 29, 0, 0, 0, 0, time.UTC)
+	sat := time.Date(2026, 7, 4, 0, 0, 0, 0, time.UTC)
+	sun := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
+	withHM := func(base time.Time, h, m int) time.Time {
+		return time.Date(base.Year(), base.Month(), base.Day(), h, m, 0, 0, time.UTC)
+	}
+
+	tue := time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC)
+
+	// 月-金 20:00-22:00
+	wdSch := []Schedule{{Days: []int{1, 2, 3, 4, 5}, Start: "20:00", End: "22:00"}}
+	// 土-日 10:00-12:00
+	weSch := []Schedule{{Days: []int{6, 0}, Start: "10:00", End: "12:00"}}
+	// 月のみ 22:00-02:00（日をまたぐ夜間スケジュール）
+	overnightMon := []Schedule{{Days: []int{1}, Start: "22:00", End: "02:00"}}
+
+	cases := []struct {
+		name      string
+		schedules []Schedule
+		t         time.Time
+		want      bool
+	}{
+		{"月曜20:30→範囲内", wdSch, withHM(mon, 20, 30), true},
+		{"月曜21:59→範囲内", wdSch, withHM(mon, 21, 59), true},
+		{"月曜22:00→終端は含まない", wdSch, withHM(mon, 22, 0), false},
+		{"月曜19:59→開始前", wdSch, withHM(mon, 19, 59), false},
+		{"土曜20:30→曜日外", wdSch, withHM(sat, 20, 30), false},
+		{"土曜10:30→範囲内", weSch, withHM(sat, 10, 30), true},
+		{"日曜10:30→範囲内", weSch, withHM(sun, 10, 30), true},
+		{"月曜10:30→曜日外", weSch, withHM(mon, 10, 30), false},
+		{"空スケジュール→常に false", []Schedule{}, withHM(mon, 20, 30), false},
+		// 夜間スケジュール（Start > End）の日またぎ
+		{"夜間: 月曜23:00→範囲内(当日夜)", overnightMon, withHM(mon, 23, 0), true},
+		{"夜間: 火曜01:30→範囲内(翌日未明)", overnightMon, withHM(tue, 1, 30), true},
+		{"夜間: 火曜02:00→終端は含まない", overnightMon, withHM(tue, 2, 0), false},
+		{"夜間: 火曜23:00→曜日指定は月曜のみなので範囲外", overnightMon, withHM(tue, 23, 0), false},
+		{"夜間: 月曜21:59→開始前", overnightMon, withHM(mon, 21, 59), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := inSchedule(c.schedules, c.t)
+			if got != c.want {
+				t.Errorf("inSchedule = %v, 期待 %v (時刻: %s)", got, c.want, c.t.Format("Mon 15:04"))
+			}
+		})
+	}
+}
+
+// gateCheck はスケジュール・遅延の各組み合わせで正しく動作すること。
+func TestGateCheck(t *testing.T) {
+	now := time.Date(2026, 7, 1, 21, 0, 0, 0, time.UTC) // 水曜 21:00
+
+	// スケジュール内（水曜 20:00-22:00）
+	inSch := []Schedule{{Days: []int{3}, Start: "20:00", End: "22:00"}}
+	// スケジュール外（月曜のみ）
+	outSch := []Schedule{{Days: []int{1}, Start: "20:00", End: "22:00"}}
+
+	cases := []struct {
+		name       string
+		cfg        Config
+		pending    *PendingReq
+		wantAllow  bool
+		wantChange bool // needsSave
+	}{
+		{
+			name:      "制限なし→即時許可",
+			cfg:       Config{},
+			pending:   nil,
+			wantAllow: true, wantChange: false,
+		},
+		{
+			name:      "遅延のみ・保留なし→新規作成",
+			cfg:       Config{DelaySeconds: 1800},
+			pending:   nil,
+			wantAllow: false, wantChange: true,
+		},
+		{
+			name:    "遅延のみ・タイマー待機中",
+			cfg:     Config{DelaySeconds: 1800},
+			pending: &PendingReq{RequestedAt: now.Add(-10 * time.Minute), DelaySeconds: 1800},
+			// 10分経過・30分待機なのであと20分
+			wantAllow: false, wantChange: false,
+		},
+		{
+			name:      "遅延のみ・タイマー切れ→許可・クリア",
+			cfg:       Config{DelaySeconds: 1800},
+			pending:   &PendingReq{RequestedAt: now.Add(-31 * time.Minute), DelaySeconds: 1800},
+			wantAllow: true, wantChange: true,
+		},
+		{
+			name:      "スケジュール内・遅延なし→許可",
+			cfg:       Config{Schedules: inSch},
+			pending:   nil,
+			wantAllow: true, wantChange: false,
+		},
+		{
+			name:      "スケジュール外→常に却下",
+			cfg:       Config{Schedules: outSch},
+			pending:   nil,
+			wantAllow: false, wantChange: false,
+		},
+		{
+			name: "スケジュール外・タイマー切れでも却下（B案）",
+			cfg:  Config{Schedules: outSch, DelaySeconds: 1800},
+			// タイマーは切れているがスケジュール外
+			pending:   &PendingReq{RequestedAt: now.Add(-60 * time.Minute), DelaySeconds: 1800},
+			wantAllow: false, wantChange: false,
+		},
+		{
+			name:      "スケジュール内・遅延あり・保留なし→新規作成",
+			cfg:       Config{Schedules: inSch, DelaySeconds: 1800},
+			pending:   nil,
+			wantAllow: false, wantChange: true,
+		},
+		{
+			name:      "スケジュール内・タイマー切れ→許可・クリア",
+			cfg:       Config{Schedules: inSch, DelaySeconds: 1800},
+			pending:   &PendingReq{RequestedAt: now.Add(-31 * time.Minute), DelaySeconds: 1800},
+			wantAllow: true, wantChange: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pending := c.pending
+			cfg := c.cfg
+			allow, change, _ := gateCheck(&cfg, &pending, now)
+			if allow != c.wantAllow {
+				t.Errorf("proceed = %v, 期待 %v", allow, c.wantAllow)
+			}
+			if change != c.wantChange {
+				t.Errorf("needsSave = %v, 期待 %v", change, c.wantChange)
+			}
+			// タイマー切れ許可の場合、pending がクリアされているか
+			if c.wantAllow && c.wantChange && pending != nil {
+				t.Errorf("許可後に pending がクリアされていない")
+			}
+			// 保留新規作成の場合、pending が設定されているか
+			if !c.wantAllow && c.wantChange && pending == nil {
+				t.Errorf("新規作成後に pending が nil のまま")
+			}
+		})
+	}
+}
+
+// configSet は --delay か --schedule の片方だけを指定した場合、
+// もう片方の既存設定を勝手に 0/nil へ戻さず維持すること（回帰テスト）。
+func TestConfigSet_未指定項目は維持される(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if err := configSet([]string{"--delay", "30m"}); err != nil {
+		t.Fatalf("1回目の configSet がエラー: %v", err)
+	}
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig がエラー: %v", err)
+	}
+	if c.DelaySeconds != 1800 {
+		t.Fatalf("1回目適用後の DelaySeconds = %d, 期待 1800", c.DelaySeconds)
+	}
+
+	// --schedule のみ指定 → 既存の delay (30分) が保持されているべき
+	if err := configSet([]string{"--schedule", "月-金 09:00-18:00"}); err != nil {
+		t.Fatalf("2回目の configSet がエラー: %v", err)
+	}
+	c, err = loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig がエラー: %v", err)
+	}
+	if c.PendingConfig == nil {
+		t.Fatal("2回目は遅延ありのため保留が作成されるはず")
+	}
+	if c.PendingConfig.NewDelaySeconds != 1800 {
+		t.Errorf("保留中の設定変更の NewDelaySeconds = %d, 期待 1800（既存の遅延が維持されるべき）", c.PendingConfig.NewDelaySeconds)
+	}
+	if len(c.PendingConfig.NewSchedules) != 1 {
+		t.Errorf("保留中の設定変更の NewSchedules 件数 = %d, 期待 1", len(c.PendingConfig.NewSchedules))
 	}
 }
 

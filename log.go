@@ -1,15 +1,11 @@
 package main
 
 import (
-	"crypto/aes"
 	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -28,67 +24,6 @@ func logDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".passcode-gen"), nil
-}
-
-// loadOrCreateSalt は ~/.passcode-gen/.salt を読み込む。存在しない場合は 32 バイトの
-// ランダムソルトを生成して保存する。
-func loadOrCreateSalt() ([]byte, error) {
-	dir, err := logDir()
-	if err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
-	}
-	saltPath := filepath.Join(dir, ".salt")
-	data, err := os.ReadFile(saltPath)
-	if err == nil && len(data) == 32 {
-		return data, nil
-	}
-	salt := make([]byte, 32)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(saltPath, salt, 0600); err != nil {
-		return nil, err
-	}
-	return salt, nil
-}
-
-// deriveKey は実行バイナリの SHA-256 と salt を組み合わせて AES-256 鍵を導出する。
-// 別ビルドのバイナリでは異なる鍵になるため、ログファイルを復号できない。
-func deriveKey(salt []byte) ([]byte, error) {
-	exePath, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("実行ファイルのパスを取得できません: %w", err)
-	}
-	realPath, err := filepath.EvalSymlinks(exePath)
-	if err != nil {
-		return nil, fmt.Errorf("シンボリックリンクを解決できません: %w", err)
-	}
-	f, err := os.Open(realPath)
-	if err != nil {
-		return nil, fmt.Errorf("実行ファイルを開けません: %w", err)
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return nil, fmt.Errorf("バイナリのハッシュ計算に失敗しました: %w", err)
-	}
-	binaryHash := h.Sum(nil)
-
-	mac := hmac.New(sha256.New, binaryHash)
-	mac.Write(salt)
-	return mac.Sum(nil), nil
-}
-
-func newAEAD(key []byte) (cipher.AEAD, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	return cipher.NewGCM(block)
 }
 
 // firstRecordDecryptable は data の先頭レコードを aead で復号できるかを返す。
@@ -117,15 +52,26 @@ func firstRecordDecryptable(data []byte, aead cipher.AEAD) bool {
 }
 
 // appendLogs は各 PIN を "timestamp PIN" 形式で暗号化してログファイルに追記する。
-// 既存ログが現在の鍵で復号できない場合（バイナリ更新など）はリセットしてから追記する。
-// ログファイル形式: [magic 4bytes][records...]
-// 各レコード: [nonce 12bytes][size 4bytes big-endian][ciphertext size bytes]
+// config.bin が存在しない場合は新規作成する（salt 生成）。
+// 既存ログが現在の鍵で復号できない場合はリセットしてから追記する。
 func appendLogs(pins []string) error {
-	salt, err := loadOrCreateSalt()
+	c, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	key, err := deriveKey(salt)
+	if c == nil {
+		// 初回: config.bin を新規作成して salt を確保する
+		salt := make([]byte, 32)
+		if _, err := rand.Read(salt); err != nil {
+			return err
+		}
+		c = &Config{Salt: salt}
+		if err := saveConfig(c); err != nil {
+			return err
+		}
+	}
+
+	key, err := logKeyFromConfig(c)
 	if err != nil {
 		return err
 	}
@@ -140,7 +86,7 @@ func appendLogs(pins []string) error {
 	}
 	logPath := filepath.Join(dir, "log.bin")
 
-	// 既存ログが現在の鍵で読めない場合はリセット（上書きモードに切り替え）
+	// 既存ログが現在の鍵で読めない場合はリセット
 	openFlags := os.O_CREATE | os.O_APPEND | os.O_WRONLY
 	if existing, readErr := os.ReadFile(logPath); readErr == nil && !firstRecordDecryptable(existing, aead) {
 		openFlags = os.O_CREATE | os.O_TRUNC | os.O_WRONLY
@@ -188,12 +134,13 @@ func appendLogs(pins []string) error {
 }
 
 // readLogs はログファイルを読み込み、全レコードを復号して返す（古い順）。
-func readLogs() ([]string, error) {
-	salt, err := loadOrCreateSalt()
-	if err != nil {
-		return nil, err
+// c が nil の場合（config.bin が未作成）はログも存在し得ないため空を返す。
+func readLogs(c *Config) ([]string, error) {
+	if c == nil {
+		return nil, nil
 	}
-	key, err := deriveKey(salt)
+
+	key, err := logKeyFromConfig(c)
 	if err != nil {
 		return nil, err
 	}
@@ -258,10 +205,31 @@ func readLogs() ([]string, error) {
 }
 
 // runLogView はログを新しい順に表示する。
+// 制限が設定されている場合は gateCheck を経由する（スケジュール外・待機中は表示しない）。
 // 10件以下はそのまま stdout へ出力し、11件以上はインタラクティブ TUI で
 // 矢印キーによるスクロールを提供する。q/ESC/Ctrl+C で終了する。
 func runLogView() error {
-	entries, err := readLogs()
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+
+	// 制限チェック（遅延またはスケジュールが設定されている場合）
+	if c != nil && (c.DelaySeconds > 0 || len(c.Schedules) > 0) {
+		now := time.Now()
+		proceed, needsSave, msg := gateCheck(c, &c.PendingView, now)
+		if needsSave {
+			if err := saveConfig(c); err != nil {
+				return err
+			}
+		}
+		if !proceed {
+			fmt.Println(msg)
+			return nil
+		}
+	}
+
+	entries, err := readLogs(c)
 	if err != nil {
 		return err
 	}

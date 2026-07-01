@@ -16,6 +16,7 @@ things like the iPhone Screen Time passcode), and you can choose 4–10 digits w
 - Configurable length from 4 to 10 digits (default 4)
 - Step mode (`-s`): reveals one digit at a time so you can memorize without exposing the full PIN
 - Encrypted log: every generated PIN is saved to `~/.passcode-gen/log.bin` (AES-256-GCM, binary-hash-bound key); readable only with the same binary
+- Viewing restriction (`passcode-gen config`): require a delay and/or a schedule window before the log can be viewed
 
 ## Installation
 
@@ -33,15 +34,19 @@ The `passcode-gen` binary is placed in `$(go env GOPATH)/bin`. Add that director
 Each run prints PINs that satisfy the rules. Length defaults to 4 digits and count defaults to 1.
 
 ```sh
-passcode-gen            # one 4-digit PIN (default)
-passcode-gen -d 6       # one 6-digit PIN
-passcode-gen --digits 8 # one 8-digit PIN
-passcode-gen -n 5       # five 4-digit PINs (all distinct)
-passcode-gen -d 6 -n 3  # three 6-digit PINs
-passcode-gen -s         # step mode: reveal one digit at a time
-passcode-gen -s -d 6    # step mode for a 6-digit PIN
-passcode-gen log        # show the encrypted log of past PINs
-passcode-gen -h         # show usage (option list)
+passcode-gen                # one 4-digit PIN (default)
+passcode-gen -d 6           # one 6-digit PIN
+passcode-gen --digits 8     # one 8-digit PIN
+passcode-gen -n 5           # five 4-digit PINs (all distinct)
+passcode-gen -d 6 -n 3      # three 6-digit PINs
+passcode-gen -s             # step mode: reveal one digit at a time
+passcode-gen -s -d 6        # step mode for a 6-digit PIN
+passcode-gen log            # show the encrypted log of past PINs
+passcode-gen config         # show current restriction settings
+passcode-gen config set --delay 30m --schedule "日 09:00-11:00"
+passcode-gen config disable # remove all restrictions
+passcode-gen help           # show usage (including subcommands)
+passcode-gen -h             # show usage (option list)
 ```
 
 Length is set with `-d` / `--digits` (**4–10 digits**) and count with `-n` / `--number`
@@ -79,6 +84,50 @@ passcode-gen log   # display past PINs, newest first
 
 Up to 10 entries are shown at once. If there are more than 10, use the arrow keys (↑/↓)
 to scroll. Press **q**, **ESC**, or **Ctrl+C** to exit the viewer.
+
+### Viewing restrictions (`passcode-gen config`)
+
+You can require a **delay** (N minutes between request and viewing) and/or a **schedule**
+(specific days/hours when any restricted action is allowed).
+
+```sh
+# Set a 30-minute delay, allowed only on Sundays 09:00–11:00
+passcode-gen config set --delay 30m --schedule "日 09:00-11:00"
+
+# Multiple schedule slots
+passcode-gen config set --delay 30m \
+  --schedule "月-金 20:00-22:00" \
+  --schedule "土,日 09:00-11:00"
+
+# Show current settings and any pending requests
+passcode-gen config
+
+# Remove all restrictions
+passcode-gen config disable
+```
+
+**Schedule format** — `"<days> <start>-<end>"`:
+
+| Example | Meaning |
+|---|---|
+| `"日 09:00-11:00"` | Sundays 09:00–11:00 |
+| `"月-金 20:00-22:00"` | Mon–Fri 20:00–22:00 |
+| `"土,日 10:00-12:00"` | Sat & Sun 10:00–12:00 |
+
+Day names accept both English (`Mon`–`Sun`) and Japanese (`月`–`日`); ranges (`月-金`) and
+comma lists (`土,日`) can be combined.
+
+**How the gate works:**
+
+1. If a schedule is set and you're outside it → **rejected** (try again in the next window)
+2. If a delay is set:
+   - First run → request is recorded; re-run after the delay expires (and while in-schedule)
+   - Timer still running → shows remaining time
+   - Timer expired → action proceeds; pending is cleared
+3. No delay, schedule only → allowed immediately whenever you're in-schedule
+
+> **Warning:** `~/.passcode-gen/config.bin` stores the salt used to encrypt `log.bin`.
+> Deleting `config.bin` permanently destroys access to the log.
 
 To run or build from a cloned repository:
 
@@ -171,6 +220,7 @@ Released under the [MIT License](LICENSE).
 - 桁数を 4〜10 桁で指定可能（省略時は 4 桁）
 - ステップモード（`-s`）: 1 桁ずつ表示し、画面に全桁を晒さず暗記できる
 - 暗号化ログ: 生成した PIN を `~/.passcode-gen/log.bin` に AES-256-GCM で保存。鍵はバイナリのハッシュから導出するため、同じバイナリ以外では復号できない
+- 閲覧制限（`passcode-gen config`）: ログを表示するまでの遅延時間や、操作可能な曜日・時刻帯を設定できる
 
 ## インストール
 
@@ -188,15 +238,19 @@ go install github.com/take-p/passcode-gen@latest
 実行するたびに、条件を満たす暗証番号を表示します。桁数を省略すると 4 桁、個数を省略すると 1 個です。
 
 ```sh
-passcode-gen            # 4桁を1個（デフォルト）
-passcode-gen -d 6       # 6桁を1個
-passcode-gen --digits 8 # 8桁を1個
-passcode-gen -n 5       # 4桁を5個（すべて異なる）
-passcode-gen -d 6 -n 3  # 6桁を3個
-passcode-gen -s         # ステップモード（1桁ずつ表示）
-passcode-gen -s -d 6    # 6桁をステップモードで表示
-passcode-gen log        # 過去に生成したパスコードのログを表示
-passcode-gen -h         # 使い方（オプション一覧）を表示
+passcode-gen                # 4桁を1個（デフォルト）
+passcode-gen -d 6           # 6桁を1個
+passcode-gen --digits 8     # 8桁を1個
+passcode-gen -n 5           # 4桁を5個（すべて異なる）
+passcode-gen -d 6 -n 3      # 6桁を3個
+passcode-gen -s             # ステップモード（1桁ずつ表示）
+passcode-gen -s -d 6        # 6桁をステップモードで表示
+passcode-gen log            # 過去に生成したパスコードのログを表示
+passcode-gen config         # 現在の閲覧制限設定を表示
+passcode-gen config set --delay 30m --schedule "日 09:00-11:00"
+passcode-gen config disable # 制限を解除する
+passcode-gen help           # 使い方（サブコマンド含む）を表示
+passcode-gen -h             # 使い方（オプション一覧）を表示
 ```
 
 桁数は `-d` / `--digits` で **4〜10 桁**、個数は `-n` / `--number` で **1〜100 個**を指定できます。
@@ -231,6 +285,47 @@ passcode-gen log   # 過去のパスコードを新しい順に表示
 
 一度に最大 10 件を表示します。11 件以上ある場合は矢印キー（↑/↓）でスクロールできます。
 **q**・**ESC**・**Ctrl+C** でビューアを終了します。
+
+### 閲覧制限（`passcode-gen config`）
+
+ログを確認できるまでの**遅延時間**と、操作を受け付ける**スケジュール（曜日・時刻帯）**を設定できます。
+
+```sh
+# 30分の遅延 + 日曜 9〜11時のみ受付
+passcode-gen config set --delay 30m --schedule "日 09:00-11:00"
+
+# スケジュール複数スロット
+passcode-gen config set --delay 30m \
+  --schedule "月-金 20:00-22:00" \
+  --schedule "土,日 09:00-11:00"
+
+# 現在の設定と保留状況を確認
+passcode-gen config
+
+# 制限を解除
+passcode-gen config disable
+```
+
+**スケジュール書式** — `"<曜日> <開始>-<終了>"`:
+
+| 例 | 意味 |
+|---|---|
+| `"日 09:00-11:00"` | 日曜 9〜11時 |
+| `"月-金 20:00-22:00"` | 月〜金 20〜22時 |
+| `"土,日 10:00-12:00"` | 土日 10〜12時 |
+
+曜日は英語（`Mon`〜`Sun`）・日本語（`月`〜`日`）どちらも使えます。レンジ（`月-金`）とカンマ（`土,日`）は混在可能です。
+
+**制限の動作**:
+
+1. スケジュールが設定されていてスケジュール外 → **却下**（次の受付時間を表示）
+2. 遅延が設定されている場合:
+   - 初回実行 → 要求を記録。遅延後・スケジュール内で再実行すると表示
+   - タイマー待機中 → 残り時間を表示
+   - タイマー切れ → 表示して保留クリア
+3. 遅延なし・スケジュールのみ → スケジュール内なら即時表示
+
+> **注意:** `~/.passcode-gen/config.bin` を削除すると `log.bin` も永久に復号できなくなります。
 
 リポジトリをクローンして手元で実行・ビルドする場合は次のようにします。
 
