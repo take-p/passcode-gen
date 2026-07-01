@@ -91,7 +91,33 @@ func newAEAD(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
+// firstRecordDecryptable は data の先頭レコードを aead で復号できるかを返す。
+// レコードが存在しない（magic のみ or 空）場合は互換とみなし true を返す。
+func firstRecordDecryptable(data []byte, aead cipher.AEAD) bool {
+	if len(data) <= 4 {
+		return true
+	}
+	if string(data[:4]) != logMagic {
+		return false
+	}
+	nonceSize := aead.NonceSize()
+	pos := 4
+	if pos+nonceSize+4 > len(data) {
+		return true
+	}
+	nonce := data[pos : pos+nonceSize]
+	pos += nonceSize
+	size := int(binary.BigEndian.Uint32(data[pos : pos+4]))
+	pos += 4
+	if pos+size > len(data) {
+		return false
+	}
+	_, err := aead.Open(nil, nonce, data[pos:pos+size], nil)
+	return err == nil
+}
+
 // appendLogs は各 PIN を "timestamp PIN" 形式で暗号化してログファイルに追記する。
+// 既存ログが現在の鍵で復号できない場合（バイナリ更新など）はリセットしてから追記する。
 // ログファイル形式: [magic 4bytes][records...]
 // 各レコード: [nonce 12bytes][size 4bytes big-endian][ciphertext size bytes]
 func appendLogs(pins []string) error {
@@ -114,7 +140,14 @@ func appendLogs(pins []string) error {
 	}
 	logPath := filepath.Join(dir, "log.bin")
 
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	// 既存ログが現在の鍵で読めない場合はリセット（上書きモードに切り替え）
+	openFlags := os.O_CREATE | os.O_APPEND | os.O_WRONLY
+	if existing, readErr := os.ReadFile(logPath); readErr == nil && !firstRecordDecryptable(existing, aead) {
+		openFlags = os.O_CREATE | os.O_TRUNC | os.O_WRONLY
+		fmt.Fprintln(os.Stderr, "警告: バイナリの更新を検出しました。過去のログをリセットして新規保存します。")
+	}
+
+	f, err := os.OpenFile(logPath, openFlags, 0600)
 	if err != nil {
 		return err
 	}
@@ -184,30 +217,40 @@ func readLogs() ([]string, error) {
 	}
 
 	if len(data) < 4 || string(data[:4]) != logMagic {
-		return nil, errors.New("ログファイルの形式が不正です")
+		_ = os.Remove(logPath)
+		fmt.Fprintln(os.Stderr, "警告: ログファイルが不正な形式でした。リセットしました。")
+		return nil, nil
 	}
 
 	nonceSize := aead.NonceSize()
 	pos := 4
 	var entries []string
 
+	resetCorrupt := func() ([]string, error) {
+		_ = os.Remove(logPath)
+		fmt.Fprintln(os.Stderr, "警告: ログファイルが破損していました。リセットしました。")
+		return nil, nil
+	}
+
 	for pos < len(data) {
 		if pos+nonceSize+4 > len(data) {
-			return nil, errors.New("ログファイルが破損しています")
+			return resetCorrupt()
 		}
 		nonce := data[pos : pos+nonceSize]
 		pos += nonceSize
 		size := int(binary.BigEndian.Uint32(data[pos : pos+4]))
 		pos += 4
 		if pos+size > len(data) {
-			return nil, errors.New("ログファイルが破損しています")
+			return resetCorrupt()
 		}
 		ciphertext := data[pos : pos+size]
 		pos += size
 
 		plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
 		if err != nil {
-			return nil, fmt.Errorf("ログの復号に失敗しました（バイナリが更新された場合は過去ログを読めません）: %w", err)
+			_ = os.Remove(logPath)
+			fmt.Fprintln(os.Stderr, "警告: ログの復号に失敗しました（バイナリが更新された場合は過去ログを読めません）。リセットしました。")
+			return nil, nil
 		}
 		entries = append(entries, string(plaintext))
 	}
