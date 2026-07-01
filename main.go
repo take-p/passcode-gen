@@ -325,6 +325,14 @@ func generatePINs(digits, count int) ([]string, error) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "log" {
+		if err := runLogView(); err != nil {
+			fmt.Fprintln(os.Stderr, "ログの表示に失敗しました:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	digits, count, stepMode, err := parseFlags(os.Args[1:])
 	if errors.Is(err, flag.ErrHelp) {
 		os.Exit(0) // usage は parseFlags が標準出力に表示済み
@@ -337,6 +345,9 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "パスワード生成に失敗しました:", err)
 		os.Exit(1)
+	}
+	if logErr := appendLogs(pins); logErr != nil {
+		fmt.Fprintln(os.Stderr, "警告: ログの保存に失敗しました:", logErr)
 	}
 	if stepMode {
 		if err := runStepMode(pins[0]); err != nil {

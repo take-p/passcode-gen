@@ -14,7 +14,8 @@ things like the iPhone Screen Time passcode), and you can choose 4–10 digits w
 - Uses `crypto/rand` (a cryptographically secure random source)
 - Excludes patterns that people tend to choose or that are easy to guess
 - Configurable length from 4 to 10 digits (default 4)
-- No dependencies (Go standard library only)
+- Step mode (`-s`): reveals one digit at a time so you can memorize without exposing the full PIN
+- Encrypted log: every generated PIN is saved to `~/.passcode-gen/log.bin` (AES-256-GCM, binary-hash-bound key); readable only with the same binary
 
 ## Installation
 
@@ -37,6 +38,9 @@ passcode-gen -d 6       # one 6-digit PIN
 passcode-gen --digits 8 # one 8-digit PIN
 passcode-gen -n 5       # five 4-digit PINs (all distinct)
 passcode-gen -d 6 -n 3  # three 6-digit PINs
+passcode-gen -s         # step mode: reveal one digit at a time
+passcode-gen -s -d 6    # step mode for a 6-digit PIN
+passcode-gen log        # show the encrypted log of past PINs
 passcode-gen -h         # show usage (option list)
 ```
 
@@ -44,9 +48,37 @@ Length is set with `-d` / `--digits` (**4–10 digits**) and count with `-n` / `
 (**1–100**). When you request multiple PINs, all of them are distinct (no duplicates).
 Length and count must be passed through these flags — a positional argument such as
 `passcode-gen 6` is rejected. Out-of-range values, non-numeric values, or extra arguments
-print an error and exit with code 2.
+print an error and exit with code 2. `-s` / `--step` and `-n` / `--number` cannot be used
+together (step mode always generates exactly one PIN).
 
 > The weak-pattern rules assume at least 4 digits, so 4 is the minimum length.
+
+### Step mode (`-s` / `--step`)
+
+Step mode reveals the PIN one digit at a time — useful when you want to memorize it
+without leaving the full number visible on screen.
+
+```
+[Enter] 次の桁  [ESC / Ctrl+C] 終了
+5  (1/4)
+```
+
+- **Enter** — advance to the next digit (wraps back to the first after the last)
+- **ESC** or **Ctrl+C** — exit
+
+### Log (`passcode-gen log`)
+
+Every generated PIN is automatically saved to `~/.passcode-gen/log.bin` using
+AES-256-GCM encryption. The encryption key is derived from the binary's own SHA-256
+hash, so the log can only be decrypted by the same binary that wrote it. Updating the
+binary (e.g., `go install`) will make previous log entries unreadable.
+
+```sh
+passcode-gen log   # display past PINs, newest first
+```
+
+Up to 10 entries are shown at once. If there are more than 10, use the arrow keys (↑/↓)
+to scroll. Press **q**, **ESC**, or **Ctrl+C** to exit the viewer.
 
 To run or build from a cloned repository:
 
@@ -137,7 +169,8 @@ Released under the [MIT License](LICENSE).
 - 乱数源に `crypto/rand`（暗号学的に安全な乱数）を使用
 - 人が選びがち・覚えやすく推測されやすいパターンを除外して生成
 - 桁数を 4〜10 桁で指定可能（省略時は 4 桁）
-- 依存ライブラリなし（Go 標準ライブラリのみ）
+- ステップモード（`-s`）: 1 桁ずつ表示し、画面に全桁を晒さず暗記できる
+- 暗号化ログ: 生成した PIN を `~/.passcode-gen/log.bin` に AES-256-GCM で保存。鍵はバイナリのハッシュから導出するため、同じバイナリ以外では復号できない
 
 ## インストール
 
@@ -160,6 +193,9 @@ passcode-gen -d 6       # 6桁を1個
 passcode-gen --digits 8 # 8桁を1個
 passcode-gen -n 5       # 4桁を5個（すべて異なる）
 passcode-gen -d 6 -n 3  # 6桁を3個
+passcode-gen -s         # ステップモード（1桁ずつ表示）
+passcode-gen -s -d 6    # 6桁をステップモードで表示
+passcode-gen log        # 過去に生成したパスコードのログを表示
 passcode-gen -h         # 使い方（オプション一覧）を表示
 ```
 
@@ -167,8 +203,34 @@ passcode-gen -h         # 使い方（オプション一覧）を表示
 複数個を指定した場合、出力される暗証番号はすべて異なる値になります（重複なし）。
 桁数・個数は必ずこれらのフラグで渡してください（`passcode-gen 6` のように位置引数で渡すことはできず、エラーになります）。
 範囲外・数値以外・余分な引数を指定した場合はエラーを表示して終了します（終了コード 2）。
+`-s` / `--step` と `-n` / `--number` は同時に指定できません（ステップモードは常に 1 個生成）。
 
 > 弱いパターンの除外ルールは 4 桁以上を前提に設計しているため、下限を 4 桁としています。
+
+### ステップモード（`-s` / `--step`）
+
+1 桁ずつ表示するモードです。画面に全桁を晒さず暗記したいときに使えます。
+
+```
+[Enter] 次の桁  [ESC / Ctrl+C] 終了
+5  (1/4)
+```
+
+- **Enter** — 次の桁へ進む（最終桁の後は先頭に戻る）
+- **ESC** または **Ctrl+C** — 終了
+
+### ログ（`passcode-gen log`）
+
+生成したパスコードはすべて `~/.passcode-gen/log.bin` に AES-256-GCM で暗号化して自動保存されます。
+鍵はバイナリ自身の SHA-256 ハッシュから導出されるため、同じバイナリ以外では復号できません。
+`go install` でバイナリを更新すると、それ以前のログは読めなくなります。
+
+```sh
+passcode-gen log   # 過去のパスコードを新しい順に表示
+```
+
+一度に最大 10 件を表示します。11 件以上ある場合は矢印キー（↑/↓）でスクロールできます。
+**q**・**ESC**・**Ctrl+C** でビューアを終了します。
 
 リポジトリをクローンして手元で実行・ビルドする場合は次のようにします。
 
